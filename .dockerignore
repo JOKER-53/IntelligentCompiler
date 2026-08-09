@@ -1,0 +1,36 @@
+# Ignore Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore virtual environments
+venv/
+env/
+
+# Ignore build and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+*.DS_Store
+
+# Ignore local IDE/project settings
+.vscode/
+.idea/
+*.iml
+
+# Ignore Git & version control folders
+.git/
+.gitignore
+
+# Ignore node-related files (if you have frontend folder)
+node_modules/
+npm-debug.log
+yarn.lock
+package-lock.json
+
+# Ignore test folders or local data
+tests/
+data/
+tmp/
