@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Intelligent Compiler</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%230F172A'/%3E%3Ctext x='50' y='68' font-size='42' fill='%23ffffff' text-anchor='middle' font-family='monospace' font-weight='700'%3EIC%3C/text%3E%3C/svg%3E">
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css"/>
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
+<style>
+:root{--bg-dark:#0f172a;--bg-panel:#1e293b;--bg-editor:#1e1e1e;--accent-primary:#3b82f6;--accent-secondary:#10b981;--accent-ai:#8b5cf6;--text-main:#e2e8f0;--text-muted:#94a3b8;--border:#334155;}
+*{box-sizing:border-box;outline:none;}
+body{font-family:'Inter',sans-serif;background:var(--bg-dark);color:var(--text-main);margin:0;padding:20px;height:100vh;display:flex;flex-direction:column;overflow:hidden;}
+header{display:flex;justify-content:space-between;align-items:center;padding-bottom:15px;border-bottom:1px solid var(--border);margin-bottom:20px;flex-wrap:wrap;gap:15px;}
+.logo-text{font-family:'Fira Code',monospace;font-weight:700;font-size:1.2rem;line-height:1.2;background:linear-gradient(135deg,var(--accent-primary),var(--accent-ai));-webkit-background-clip:text;background-clip:text;color:transparent;}
+.logo-text small{font-size:0.7rem;display:block;color:var(--text-muted);background:none;-webkit-background-clip:unset;background-clip:unset;}
+.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+.select-wrapper{position:relative;}
+.select-wrapper i{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--accent-primary);z-index:10;pointer-events:none;}
+select{appearance:none;background:var(--bg-panel);color:white;border:1px solid var(--border);padding:10px 15px 10px 35px;border-radius:8px;cursor:pointer;}
+button{border:none;padding:10px 18px;border-radius:8px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;font-size:0.9rem;transition:0.2s;}
+button:disabled{opacity:0.5;cursor:not-allowed;}
+.btn-run{background:var(--accent-secondary);color:#064e3b;}
+.btn-run:hover:not(:disabled){background:#34d399;}
+.btn-ai-trigger{background:linear-gradient(135deg,#6366f1,#8b5cf6);color:white;}
+.btn-ai-trigger:hover:not(:disabled){opacity:0.9;transform:translateY(-1px);}
+#header-fix-btn{background:#10b981;color:#022c22;padding:5px 15px;border-radius:6px;font-size:0.8rem;display:none;margin-left:auto;}
+#header-fix-btn:hover:not(:disabled){background:#34d399;}
+#view-new-tab-btn,#copy-output-btn{background:#64748b;color:white;padding:10px 18px;font-size:0.9rem;}
+#view-new-tab-btn:hover:not(:disabled),#copy-output-btn:hover:not(:disabled){background:#475569;}
+#download-code-btn{background:var(--accent-primary);color:white;}
+#download-code-btn:hover:not(:disabled){background:#2563eb;}
+#upload-btn{background:#1e293b;color:#94a3b8;border:1px solid #334155;padding:10px 18px;border-radius:8px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;font-size:0.9rem;font-family:'Inter',sans-serif;transition:0.2s;white-space:nowrap;}
+#upload-btn:hover{background:#334155;color:#e2e8f0;}
+#about-btn{background:#1e293b;color:#94a3b8;border:1px solid #334155;}
+#about-btn:hover{background:#334155;color:#e2e8f0;}
+@keyframes fadeIn{from{opacity:0;transform:scale(0.9);}to{opacity:1;transform:scale(1);}}
+
+/* Layout */
+.main-container{display:flex;flex-direction:column;flex:1;min-height:0;}
+.row-top{flex:0 0 55%;display:flex;flex-direction:column;min-height:0;overflow:hidden;}
+.row-bottom{flex:1;display:flex;flex-direction:row;min-height:0;overflow:hidden;}
+.panel{background:var(--bg-panel);border-radius:12px;border:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;min-height:0;min-width:0;}
+.panel-header{background:rgba(0,0,0,0.2);padding:8px 15px;font-size:0.85rem;font-weight:600;color:var(--text-muted);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;justify-content:space-between;flex-shrink:0;}
+.editor-area{background:var(--bg-editor);flex:1;display:flex;flex-direction:column;}
+#monaco-container{flex:1;min-height:0;overflow:hidden;}
+.terminal-area{flex:1;background:black;}
+.ai-area{flex:1;border:1px solid var(--accent-ai);}
+#terminal{flex:1;width:100%;height:100%;padding:10px;overflow:hidden;}
+div#ai-out{flex:1;padding:15px;overflow-y:auto;font-family:'Inter',sans-serif;color:#c4b5fd;line-height:1.6;background:#13111c;}
+#ai-out code{background:rgba(255,255,255,0.1);padding:2px 5px;border-radius:4px;font-family:'Fira Code';color:#fff;}
+#ai-out pre{background:#0b0b11;padding:10px;border-radius:8px;border:1px solid #333;overflow-x:auto;}
+#preview{width:100%;height:100%;background:white;border:none;display:none;}
+
+/* Status bar */
+#error-status-bar{display:flex;align-items:center;gap:8px;padding:0 12px;font-size:0.78rem;font-family:'Fira Code',monospace;border-top:1px solid var(--border);background:rgba(0,0,0,0.25);min-height:26px;flex-shrink:0;overflow:hidden;white-space:nowrap;cursor:pointer;user-select:none;transition:background 0.2s;}
+#error-status-bar:hover{background:rgba(255,255,255,0.05);}
+#error-status-bar.has-errors{border-top-color:#ef4444;}
+#error-status-bar.has-warnings{border-top-color:#f59e0b;}
+#error-status-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text-muted);}
+#error-status-bar.has-errors #error-status-text{color:#fca5a5;}
+#error-status-bar.has-warnings #error-status-text{color:#fcd34d;}
+#error-status-bar.is-ok #error-status-text{color:#6ee7b7;}
+
+/* Problems panel */
+#error-panel{display:none;position:fixed;background:#0d1424;border:1px solid #2d3f55;border-radius:8px 8px 0 0;z-index:9999;max-height:220px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#334155 transparent;box-shadow:0 -4px 20px rgba(0,0,0,0.5);}
+.ep-header{padding:6px 14px;font-size:0.7rem;font-family:'Fira Code',monospace;color:#64748b;border-bottom:1px solid #1e293b;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;background:#0d1424;z-index:1;}
+#error-table{width:100%;border-collapse:collapse;font-family:'Fira Code',monospace;font-size:0.78rem;}
+#error-table tr{border-bottom:1px solid #1a2535;}
+#error-table tr:hover{background:rgba(255,255,255,0.04);cursor:pointer;}
+#error-table td{padding:5px 14px;vertical-align:middle;}
+.et-line{color:#4a5568;width:52px;font-size:0.72rem;}
+.et-sev-error{color:#f87171;width:18px;}
+.et-sev-warning{color:#fbbf24;width:18px;}
+.et-msg-error{color:#fca5a5;}
+.et-msg-warning{color:#fde68a;}
+
+/* Splitters */
+.splitter-h{height:8px;cursor:ns-resize;background:#1e293b;border-top:1px solid #0f172a;border-bottom:1px solid #0f172a;flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:background 0.15s;}
+.splitter-h::after{content:"· · ·";color:#334155;font-size:10px;letter-spacing:3px;pointer-events:none;}
+.splitter-h:hover,.splitter-h.dragging{background:rgba(59,130,246,0.2);}
+.splitter-h:hover::after,.splitter-h.dragging::after{color:#3b82f6;}
+.splitter-v{width:8px;cursor:ew-resize;background:#1e293b;border-left:1px solid #0f172a;border-right:1px solid #0f172a;flex-shrink:0;display:flex;align-items:center;justify-content:center;writing-mode:vertical-lr;transition:background 0.15s;}
+.splitter-v::after{content:"· · ·";color:#334155;font-size:10px;letter-spacing:3px;pointer-events:none;}
+.splitter-v:hover,.splitter-v.dragging{background:rgba(59,130,246,0.2);}
+.splitter-v:hover::after,.splitter-v.dragging::after{color:#3b82f6;}
+
+/* Drop overlay */
+#drop-overlay{display:none;position:absolute;inset:0;z-index:100;background:rgba(59,130,246,0.12);border:2px dashed var(--accent-primary);border-radius:8px;align-items:center;justify-content:center;flex-direction:column;gap:10px;pointer-events:none;}
+#drop-overlay.active{display:flex;}
+#drop-overlay i{font-size:2.5rem;color:var(--accent-primary);}
+#drop-overlay p{color:var(--accent-primary);font-weight:600;margin:0;}
+
+/* Misc */
+.status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+.status-dot.error{background:#ef4444;box-shadow:0 0 6px #ef4444;}
+.status-dot.warning{background:#f59e0b;box-shadow:0 0 6px #f59e0b;}
+.status-dot.ok{background:#10b981;box-shadow:0 0 6px #10b981;}
+.status-dot.loading{background:#64748b;animation:pulse 1s infinite;}
+.spinner{display:inline-block;animation:spin 1s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}
+
+/* About modal */
+#about-overlay{display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.75);align-items:center;justify-content:center;backdrop-filter:blur(6px);}
+#about-overlay.open{display:flex;}
+#about-box{background:#0d1424;border:1px solid #1e3a5f;border-radius:20px;width:580px;max-width:96vw;max-height:92vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 0 0 1px rgba(59,130,246,0.1),0 30px 80px rgba(0,0,0,0.8);animation:popIn 0.2s cubic-bezier(0.34,1.56,0.64,1);}
+@keyframes popIn{from{opacity:0;transform:scale(0.88) translateY(16px);}to{opacity:1;transform:scale(1) translateY(0);}}
+.about-header{background:linear-gradient(135deg,#0f2444 0%,#1a0a2e 50%,#0a1628 100%);padding:32px 28px 22px;text-align:center;position:relative;border-bottom:1px solid #1e3a5f;flex-shrink:0;overflow:hidden;}
+.about-header::before{content:"";position:absolute;inset:0;background:radial-gradient(ellipse at 50% 0%,rgba(59,130,246,0.15) 0%,transparent 70%);pointer-events:none;}
+.about-close{position:absolute;top:12px;right:14px;background:rgba(255,255,255,0.05);border:1px solid #1e293b;color:#64748b;font-size:1rem;cursor:pointer;width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;transition:0.15s;}
+.about-close:hover{background:rgba(255,255,255,0.1);color:#e2e8f0;}
+.about-avatar{width:78px;height:78px;border-radius:50%;margin:0 auto 14px;background:linear-gradient(135deg,#3b82f6,#8b5cf6,#ec4899);display:flex;align-items:center;justify-content:center;font-family:'Fira Code',monospace;font-weight:800;font-size:1.6rem;color:white;box-shadow:0 0 0 3px #0d1424,0 0 0 5px rgba(59,130,246,0.4),0 8px 24px rgba(59,130,246,0.3);position:relative;z-index:1;}
+.about-name{font-size:1.25rem;font-weight:800;color:#f8fafc;margin-bottom:4px;}
+.about-username{font-family:'Fira Code',monospace;color:#60a5fa;font-size:0.85rem;margin-bottom:6px;}
+.about-tagline{font-size:0.73rem;color:#475569;}
+.about-tabs{display:flex;background:#080f1a;border-bottom:1px solid #1e2d40;flex-shrink:0;}
+.atab{flex:1;padding:11px;background:none;border:none;border-radius:0;color:#475569;font-size:0.82rem;font-weight:600;cursor:pointer;border-bottom:2px solid transparent;display:flex;align-items:center;justify-content:center;gap:7px;transition:0.15s;}
+.atab:hover{color:#94a3b8;}
+.atab.active{color:#3b82f6;border-bottom-color:#3b82f6;background:rgba(59,130,246,0.05);}
+.about-tab-content{overflow-y:auto;flex:1;scrollbar-width:thin;scrollbar-color:#1e293b transparent;}
+.about-row{display:flex;align-items:flex-start;gap:14px;padding:13px 24px;border-bottom:1px solid #0f1929;}
+.about-row i{color:#3b82f6;width:16px;margin-top:3px;flex-shrink:0;font-size:0.9rem;}
+.about-row-label{font-size:0.68rem;color:#334155;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px;}
+.about-row-val{font-size:0.85rem;color:#94a3b8;line-height:1.5;}
+.about-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px;}
+.about-tag{background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.2);color:#7dd3fc;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-family:'Fira Code',monospace;}
+.feat-row{display:flex;align-items:flex-start;gap:14px;padding:13px 24px;border-bottom:1px solid #0f1929;}
+.feat-icon{width:34px;height:34px;border-radius:9px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:0.9rem;}
+.btn-green{background:rgba(16,185,129,0.15);color:#10b981;}
+.btn-purple{background:rgba(139,92,246,0.15);color:#a78bfa;}
+.btn-blue{background:rgba(59,130,246,0.15);color:#60a5fa;}
+.btn-gray{background:rgba(100,116,139,0.15);color:#94a3b8;}
+.btn-red{background:rgba(239,68,68,0.15);color:#f87171;}
+.feat-name{font-size:0.85rem;font-weight:700;color:#e2e8f0;margin-bottom:3px;}
+.feat-desc{font-size:0.78rem;color:#64748b;line-height:1.55;}
+.feat-desc strong{color:#94a3b8;}
+.about-footer{padding:12px 24px;background:#080f1a;border-top:1px solid #1e2d40;display:flex;gap:10px;justify-content:center;flex-shrink:0;flex-wrap:wrap;}
+.about-footer a{display:flex;align-items:center;gap:6px;color:#475569;font-size:0.78rem;text-decoration:none;padding:5px 13px;border-radius:7px;border:1px solid #1e2d40;transition:0.15s;}
+.about-footer a:hover{color:#e2e8f0;border-color:#3b82f6;background:rgba(59,130,246,0.08);}
+
+@media(max-width:768px){
+  body{padding:10px;}
+  header{flex-direction:column;align-items:stretch;gap:8px;}
+  .toolbar{justify-content:center;flex-wrap:wrap;}
+  .main-container{flex-direction:column;}
+  .row-top{flex:0 0 auto;min-height:260px;}
+  .row-bottom{flex:0 0 auto;flex-direction:column;min-height:380px;}
+  .splitter-h,.splitter-v{display:none;}
+  .terminal-area{flex:0 0 180px;}
+  .ai-area{flex:1;}
+  button,#upload-btn{padding:8px 12px;font-size:0.82rem;}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo-container">
+    <div class="logo-text">INTELLIGENT<br><small>COMPILER</small></div>
+  </div>
+  <div class="toolbar">
+    <div class="select-wrapper">
+      <i class="fa-solid fa-code"></i>
+      <select id="lang" onchange="changeLanguage()">
+        <option value="python">Python</option>
+        <option value="c">C</option>
+        <option value="cpp">C++</option>
+        <option value="java">Java</option>
+        <option value="js">JavaScript</option>
+        <option value="html">HTML</option>
+      </select>
+    </div>
+    <button class="btn-run" onclick="runCode()" id="run-btn"><i class="fa-solid fa-play"></i> Run Code</button>
+    <button class="btn-ai-trigger" onclick="askAI()" id="ai-btn"><i class="fa-solid fa-wand-magic-sparkles"></i> Get Suggestions</button>
+    <button id="download-code-btn" onclick="downloadCode()"><i class="fa-solid fa-download"></i> Download</button>
+    <label id="upload-btn" title="Upload code file (max 2 MB)">
+      <i class="fa-solid fa-upload"></i> Upload
+      <input type="file" id="file-input" accept=".py,.c,.cpp,.java,.js,.html,.txt" style="display:none;" onchange="uploadFile(event)">
+    </label>
+    <button id="about-btn" onclick="openAbout()"><i class="fa-solid fa-circle-info"></i> About</button>
+  </div>
+</header>
+
+<div class="main-container" id="main-container">
+  <div class="row-top" id="row-top">
+    <div class="panel editor-area" id="editor-area-el" style="position:relative;">
+      <div class="panel-header"><span><i class="fa-regular fa-file-code"></i> Editor</span></div>
+      <div id="drop-overlay"><i class="fa-solid fa-file-arrow-up"></i><p>Drop file here (max 2MB)</p></div>
+      <div id="monaco-container"></div>
+      <div id="error-status-bar" onclick="toggleErrorPanel()" title="Click to expand/collapse">
+        <span class="status-dot loading"></span>
+        <span id="error-status-text">Initializing linter…</span>
+        <span id="error-expand-icon" style="margin-left:auto;padding-left:10px;font-size:0.75rem;flex-shrink:0;">▲</span>
+      </div>
+    </div>
+  </div>
+  <div class="splitter-h" id="splitter-h"></div>
+  <div class="row-bottom" id="row-bottom">
+    <div class="panel terminal-area" id="terminal-panel">
+      <div class="panel-header">
+        <span><i class="fa-solid fa-desktop"></i> Terminal Output</span>
+        <div style="display:flex;gap:8px;">
+          <button id="copy-output-btn" onclick="copyOutput()"><i class="fa-solid fa-copy"></i> Copy Output</button>
+          <button id="view-new-tab-btn" onclick="viewInNewTab()"><i class="fa-solid fa-arrow-up-right-from-square"></i> View in New Tab</button>
+        </div>
+      </div>
+      <div style="flex:1;position:relative;overflow:hidden;display:flex;flex-direction:column;">
+        <div id="terminal"></div>
+        <iframe id="preview"></iframe>
+      </div>
+    </div>
+    <div class="splitter-v" id="splitter-v"></div>
+    <div class="panel ai-area" id="ai-panel">
+      <div class="panel-header" style="background:linear-gradient(90deg,rgba(139,92,246,0.1),transparent);">
+        <span style="color:#c4b5fd;"><i class="fa-solid fa-robot"></i> Assistant</span>
+        <button id="header-fix-btn" onclick="applyFix()"><i class="fa-solid fa-check-double"></i> Apply Fix</button>
+      </div>
+      <div id="ai-out"><p style="opacity:0.5;margin-top:20px;text-align:center;"><i class="fa-solid fa-robot fa-2x"></i><br><br>Click <b>"Get Suggestions"</b><br>to analyze your code.</p></div>
+    </div>
+  </div>
+</div>
+
+<!-- About Modal -->
+<div id="about-overlay">
+  <div id="about-box">
+    <div class="about-header">
+      <button class="about-close" onclick="closeAbout()"><i class="fa-solid fa-xmark"></i></button>
+      <div class="about-avatar">KE</div>
+      <div class="about-name">KADHIRAVAN E.G</div>
+      <div class="about-username">@JOKER53</div>
+      <div class="about-tagline">Cyber Security Student · DevSecOps · AI Tooling</div>
+    </div>
+    <div class="about-tabs">
+      <button class="atab active" onclick="switchTab('dev')"><i class="fa-solid fa-user"></i> Developer</button>
+      <button class="atab" onclick="switchTab('features')"><i class="fa-solid fa-list"></i> Features</button>
+    </div>
+    <div id="atab-dev" class="about-tab-content">
+      <div class="about-row"><i class="fa-solid fa-graduation-cap"></i><div><div class="about-row-label">Institution</div><div class="about-row-val">Sri Shakthi Institute of Engineering and Technology</div></div></div>
+      <div class="about-row"><i class="fa-solid fa-shield-halved"></i><div><div class="about-row-label">Field</div><div class="about-row-val">Cyber Security · DevSecOps · Cloud Security</div></div></div>
+      <div class="about-row"><i class="fa-solid fa-trophy"></i><div><div class="about-row-label">CTF / Labs</div><div class="about-row-val">HackTheBox · Penetration Testing · OSCP Track</div></div></div>
+      <div class="about-row"><i class="fa-solid fa-code"></i><div><div class="about-row-label">Skills</div><div class="about-tags"><span class="about-tag">Python</span><span class="about-tag">C/C++</span><span class="about-tag">Java</span><span class="about-tag">JavaScript</span><span class="about-tag">FastAPI</span><span class="about-tag">Docker</span><span class="about-tag">Arch Linux</span><span class="about-tag">HackTheBox</span></div></div></div>
+      <div class="about-row"><i class="fa-brands fa-linux"></i><div><div class="about-row-label">Environment</div><div class="about-row-val">Arch Linux · Fish Shell · Monaco Editor · NVIDIA NIM</div></div></div>
+      <div class="about-row" style="border:none;"><i class="fa-solid fa-laptop-code"></i><div><div class="about-row-label">Project</div><div class="about-row-val">Intelligent Compiler — browser-based multi-language IDE with AI-powered suggestions, real-time linting, and WebSocket execution.</div></div></div>
+    </div>
+    <div id="atab-features" class="about-tab-content" style="display:none;">
+      <div class="feat-row"><div class="feat-icon btn-green"><i class="fa-solid fa-play"></i></div><div><div class="feat-name">Run Code</div><div class="feat-desc">Execute Python, C, C++, Java, JavaScript &amp; HTML. Live stdin input via WebSocket.</div></div></div>
+      <div class="feat-row"><div class="feat-icon btn-purple"><i class="fa-solid fa-wand-magic-sparkles"></i></div><div><div class="feat-name">Get Suggestions</div><div class="feat-desc">AI via <strong>Llama 3.1 8B (NVIDIA NIM)</strong> — explains errors, Time &amp; Space complexity, complete fixed code with inline comments.</div></div></div>
+      <div class="feat-row"><div class="feat-icon btn-green"><i class="fa-solid fa-check-double"></i></div><div><div class="feat-name">Apply Fix</div><div class="feat-desc">One-click replace with AI fix. Auto re-lints after applying.</div></div></div>
+      <div class="feat-row"><div class="feat-icon btn-blue"><i class="fa-solid fa-download"></i></div><div><div class="feat-name">Download / Upload</div><div class="feat-desc">Download with correct extension. Upload any code file — max <strong>2 MB</strong>, language auto-detected.</div></div></div>
+      <div class="feat-row"><div class="feat-icon btn-red"><i class="fa-solid fa-triangle-exclamation"></i></div><div><div class="feat-name">Real-time Linting</div><div class="feat-desc">Red/yellow squiggles as you type. Click status bar for PROBLEMS panel with all errors + line jump.<div class="about-tags" style="margin-top:5px;"><span class="about-tag">Python→pyflakes</span><span class="about-tag">C/C++→GCC</span><span class="about-tag">Java→javac</span><span class="about-tag">JS→node</span><span class="about-tag">HTML→built-in</span></div></div></div></div>
+      <div class="feat-row" style="border:none;"><div class="feat-icon btn-gray"><i class="fa-solid fa-arrows-split-up-and-left"></i></div><div><div class="feat-name">Draggable Splitters</div><div class="feat-desc">Drag the bar between editor and terminal to resize. Drag between terminal and AI to resize side-by-side.</div></div></div>
+    </div>
+    <div class="about-footer">
+      <a href="https://github.com/KADHIRAVANEG/IntelligentCompiler" target="_blank"><i class="fa-brands fa-github"></i> GitHub</a>
+      <a href="https://intelligentcompiler.onrender.com" target="_blank"><i class="fa-solid fa-globe"></i> Live Demo</a>
+    </div>
+  </div>
+</div>
+
+<!-- Problems panel (outside all overflow:hidden) -->
+<div id="error-panel">
+  <div class="ep-header">
+    <span>⚡ PROBLEMS</span>
+    <span onclick="toggleErrorPanel()" style="cursor:pointer;padding:2px 6px;border-radius:4px;background:rgba(255,255,255,0.05);">✕ close</span>
+  </div>
+  <table id="error-table"></table>
+</div>
+
+<script>
+// ── Config ──
+const isLocalhost = location.hostname==='localhost'||location.hostname==='127.0.0.1';
+const API_BASE = isLocalhost?'http://localhost:5000':'https://intelligentcompiler.onrender.com';
+const WS_BASE  = isLocalhost?'ws://localhost:5000':'wss://intelligentcompiler.onrender.com';
+
+let ws=null,editor=null,term=null,fitAddon=null;
+let pendingAiFix="",outputBuffer="",inputBuffer="";
+let lintDebounceTimer=null,lintAbortController=null;
+const LINT_DEBOUNCE_MS=600;
+const LINTABLE_LANGS=new Set(["python","c","cpp","java","js"]);
+
+const boilerplate={
+  python:`print("="*50)\nprint("Developer: JOKER53 (KADHIRAVAN EG)")\nprint("Cyber Security Student")\nprint("="*50)\nname=input("Enter your name: ")\nprint(f"Hello, {name}!")`,
+  c:`#include <stdio.h>\nint main(){\n    char name[50];\n    printf("Enter name: ");\n    scanf("%s",name);\n    printf("Hello, %s!\\n",name);\n    return 0;\n}`,
+  cpp:`#include <iostream>\n#include <string>\nusing namespace std;\nint main(){\n    string name;\n    cout<<"Enter name: ";\n    cin>>name;\n    cout<<"Hello, "<<name<<"!"<<endl;\n    return 0;\n}`,
+  java:`import java.util.Scanner;\npublic class Main{\n    public static void main(String[] args){\n        Scanner s=new Scanner(System.in);\n        System.out.print("Enter name: ");\n        String name=s.nextLine();\n        System.out.println("Hello "+name+"!");\n    }\n}`,
+  js:`console.log("Hello from JavaScript!");\nconsole.log("Try adding more code here");`,
+  html:`<!DOCTYPE html>\n<html>\n<head><title>My Page</title></head>\n<body>\n  <h1>Hello HTML!</h1>\n</body>\n</html>`
+};
+
+// ── Monaco init ──
+require.config({paths:{vs:'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs'}});
+require(['vs/editor/editor.main'],function(){
+  editor=monaco.editor.create(document.getElementById('monaco-container'),{
+    value:localStorage.getItem('code_python')||boilerplate.python,
+    language:'python',theme:'vs-dark',automaticLayout:true,fontSize:14,
+    minimap:{enabled:false},scrollBeyondLastLine:false,wordWrap:'on',
+    lightbulb:{enabled:true},renderValidationDecorations:'on',
+  });
+  editor.onDidChangeModelContent(()=>{saveCode();scheduleLint();});
+  setTimeout(scheduleLint,800);
+  setStatusLoading("Ready");
+});
+
+// ── Lint ──
+function scheduleLint(){clearTimeout(lintDebounceTimer);lintDebounceTimer=setTimeout(runLint,LINT_DEBOUNCE_MS);}
+async function runLint(){
+  const lang=document.getElementById("lang").value;
+  if(lang==="html"){lintHTML();return;}
+  if(!LINTABLE_LANGS.has(lang)){clearMarkers();setStatusOk("No linting for "+lang);return;}
+  if(!editor)return;
+  const code=editor.getValue();
+  if(!code.trim()){clearMarkers();setStatusOk("No errors");return;}
+  if(lintAbortController)lintAbortController.abort();
+  lintAbortController=new AbortController();
+  setStatusLoading("Checking…");
+  try{
+    const res=await fetch(`${API_BASE}/lint`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code,lang}),signal:lintAbortController.signal});
+    if(!res.ok)throw new Error(`HTTP ${res.status}`);
+    applyDiagnostics((await res.json()).diagnostics||[]);
+  }catch(err){
+    if(err.name==="AbortError")return;
+    clearMarkers();setStatusOk("Linter unavailable");
+  }
+}
+
+function lintHTML(){
+  if(!editor)return;
+  const code=editor.getValue();
+  if(!code.trim()){clearMarkers();setStatusOk("No errors");return;}
+  setStatusLoading("Checking HTML…");
+  const diagnostics=[],lower=code.toLowerCase(),lines=code.split("\n");
+  const findLine=p=>{for(let i=0;i<lines.length;i++)if(lines[i].toLowerCase().includes(p))return i+1;return 1;};
+  const isDoc=lower.includes("<!doctype")||lower.includes("<html");
+  if(isDoc){
+    for(const[tag,msg]of[["<!doctype","Missing <!DOCTYPE html>"],["<html","Missing <html>"],["<head","Missing <head>"],["<body","Missing <body>"],["<title","Missing <title>"]])
+      if(!lower.includes(tag))diagnostics.push({line:1,col:1,endLine:1,endCol:2,message:msg,severity:"warning"});
+    const knownTags=new Set(["html","head","body","title","meta","link","script","style","div","span","p","a","img","ul","ol","li","table","tr","td","th","thead","tbody","tfoot","h1","h2","h3","h4","h5","h6","header","footer","main","nav","section","article","aside","form","input","button","textarea","select","option","label","fieldset","legend","br","hr","em","strong","b","i","u","s","small","sub","sup","code","pre","blockquote","figure","figcaption","picture","source","video","audio","canvas","svg","iframe","embed","object","details","summary","time","mark","noscript","!doctype"]);
+    for(const m of[...code.matchAll(/<\/?([a-z][a-z0-9-]*)/gi)]){
+      const tag=m[1].toLowerCase();
+      if(!knownTags.has(tag)){
+        const ln=code.slice(0,m.index).split("\n").length;
+        diagnostics.push({line:ln,col:1,endLine:ln,endCol:2,message:`Unknown tag: <${tag}> — possible typo`,severity:"error"});
+      }
+    }
+    for(const m of[...code.matchAll(/<img(?![^>]*alt=)[^>]*>/gi)]){
+      const ln=code.slice(0,m.index).split("\n").length;
+      diagnostics.push({line:ln,col:1,endLine:ln,endCol:2,message:"<img> missing alt attribute",severity:"warning"});
+    }
+  }
+  applyDiagnostics(diagnostics);
+}
+
+function tokenEnd(t,c){let i=c-1;while(i<t.length&&t[i]===" ")i++;const s=i;if(i>=t.length)return c+1;if(/[a-zA-Z_]/.test(t[i])){while(i<t.length&&/[\w$]/.test(t[i]))i++;}else i++;if(i===s)i=s+1;return i+1;}
+
+function applyDiagnostics(diagnostics){
+  if(!editor)return;
+  const model=editor.getModel();
+  const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  monaco.editor.setModelMarkers(model,"intellicompiler",diagnostics.map(d=>{
+    const sc=d.col||1,le=d.endCol||0;
+    return{severity:d.severity==="error"?monaco.MarkerSeverity.Error:monaco.MarkerSeverity.Warning,
+      startLineNumber:d.line,startColumn:sc,endLineNumber:d.endLine||d.line,
+      endColumn:(le>sc&&le-sc>2)?le:tokenEnd(model.getLineContent(d.line)||"",sc),
+      message:d.message,source:"Intelligent Compiler"};
+  }));
+  const tbl=document.getElementById("error-table");
+  if(tbl)tbl.innerHTML=diagnostics.map(d=>{const e=d.severity==="error";return`<tr onclick="jumpToLine(${d.line})"><td class="et-line">L${d.line}</td><td class="${e?"et-sev-error":"et-sev-warning"}">${e?"✖":"⚠"}</td><td class="${e?"et-msg-error":"et-msg-warning"}">${esc(d.message)}</td></tr>`;}).join("");
+  const errs=diagnostics.filter(d=>d.severity==="error"),warns=diagnostics.filter(d=>d.severity==="warning");
+  if(errs.length>0){
+    const first=`L${errs[0].line}: ${truncate(errs[0].message,45)}`;
+    const more=(errs.length-1+warns.length)>0?`  +${errs.length-1+warns.length} more  ▲`:"  ▲";
+    setStatusError(`✖ ${errs.length} error${errs.length>1?"s":""}${warns.length?`  ·  ${warns.length} warning${warns.length>1?"s":""}`:""}     ${first}${more}`);
+  }else if(warns.length>0){
+    setStatusWarning(`⚠ ${warns.length} warning${warns.length>1?"s":""}     L${warns[0].line}: ${truncate(warns[0].message,45)}${warns.length>1?`  +${warns.length-1} more  ▲`:"  ▲"}`);
+  }else{closeProblemPanel();setStatusOk("No errors");}
+}
+
+function toggleErrorPanel(){const p=document.getElementById("error-panel");p&&p.style.display==="block"?closeProblemPanel():openProblemPanel();}
+function openProblemPanel(){
+  const p=document.getElementById("error-panel"),bar=document.getElementById("error-status-bar"),icon=document.getElementById("error-expand-icon");
+  if(!p||!bar)return;
+  const r=bar.getBoundingClientRect();
+  p.style.left=r.left+"px";p.style.right=(window.innerWidth-r.right)+"px";p.style.bottom=(window.innerHeight-r.top)+"px";
+  p.style.display="block";if(icon)icon.textContent="▼";
+}
+function closeProblemPanel(){const p=document.getElementById("error-panel"),i=document.getElementById("error-expand-icon");if(p)p.style.display="none";if(i)i.textContent="▲";}
+function jumpToLine(n){if(!editor)return;closeProblemPanel();editor.revealLineInCenter(n);editor.setPosition({lineNumber:n,column:1});editor.focus();}
+window.addEventListener("resize",()=>{const p=document.getElementById("error-panel");if(p&&p.style.display==="block")openProblemPanel();});
+function clearMarkers(){if(!editor)return;monaco.editor.setModelMarkers(editor.getModel(),"intellicompiler",[]);const t=document.getElementById("error-table");if(t)t.innerHTML="";}
+function truncate(s,l){return s.length>l?s.slice(0,l)+"…":s;}
+
+// ── Status helpers ──
+function setStatusLoading(m){const b=document.getElementById("error-status-bar");b.className="";b.querySelector(".status-dot").className="status-dot loading";document.getElementById("error-status-text").textContent=m;}
+function setStatusOk(m){const b=document.getElementById("error-status-bar");b.className="is-ok";b.querySelector(".status-dot").className="status-dot ok";document.getElementById("error-status-text").textContent="✓ "+m;}
+function setStatusError(m){const b=document.getElementById("error-status-bar");b.className="has-errors";b.querySelector(".status-dot").className="status-dot error";document.getElementById("error-status-text").textContent=m;}
+function setStatusWarning(m){const b=document.getElementById("error-status-bar");b.className="has-warnings";b.querySelector(".status-dot").className="status-dot warning";document.getElementById("error-status-text").textContent=m;}
+
+// ── Storage ──
+function saveCode(){if(editor)localStorage.setItem(`code_${document.getElementById("lang").value}`,editor.getValue());}
+function loadCode(){if(editor){const lang=document.getElementById("lang").value;editor.setValue(localStorage.getItem(`code_${lang}`)||boilerplate[lang]||"");}}
+
+// ── Window load ──
+window.onload=function(){
+  term=new Terminal({cursorBlink:true,theme:{background:'#000000',foreground:'#4ade80',cursor:'#ffffff'},fontSize:14,fontFamily:"'Fira Code',monospace",convertEol:true,scrollback:1000});
+  fitAddon=new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(document.getElementById('terminal'));
+  fitAddon.fit();
+  term.writeln("\x1b[2m═══════════════════════════════════════════\x1b[0m");
+  term.writeln("\x1b[2m Intelligent Compiler Terminal Ready\x1b[0m");
+  term.writeln("\x1b[2m═══════════════════════════════════════════\x1b[0m");
+  term.writeln("");
+  window.addEventListener('resize',()=>{if(fitAddon)fitAddon.fit();});
+  term.onData(e=>{
+    if(!ws||ws.readyState!==WebSocket.OPEN)return;
+    switch(e){
+      case'\r':term.write('\r\n');ws.send(JSON.stringify({stdin:inputBuffer}));outputBuffer+=inputBuffer+"\n";inputBuffer="";break;
+      case'\u007F':if(inputBuffer.length>0){inputBuffer=inputBuffer.slice(0,-1);term.write('\b \b');}break;
+      case'\u0003':term.write('^C\r\n');inputBuffer="";if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({stdin:"__INTERRUPT__"}));break;
+      default:if(e>=' '&&e<='~'){inputBuffer+=e;term.write(e);}
+    }
+  });
+  loadCode();
+  updateNewTabButton();
+  initSplitters();
+  initDragDrop();
+};
+
+// ── Language ──
+function changeLanguage(){
+  const lang=document.getElementById("lang").value;
+  const map={python:"python",c:"c",cpp:"cpp",java:"java",js:"javascript",html:"html"};
+  if(editor){monaco.editor.setModelLanguage(editor.getModel(),map[lang]);loadCode();clearMarkers();setTimeout(scheduleLint,200);}
+  updateNewTabButton();
+}
+function updateNewTabButton(){const b=document.getElementById("view-new-tab-btn");if(b)b.style.display=document.getElementById("lang").value==="html"?"flex":"none";}
+
+// ── Run ──
+function runCode(){
+  const runBtn=document.getElementById("run-btn"),termDiv=document.getElementById("terminal"),preview=document.getElementById("preview");
+  const fixBtn=document.getElementById("header-fix-btn"),code=editor.getValue(),lang=document.getElementById("lang").value;
+  fixBtn.style.display="none";pendingAiFix="";outputBuffer="";inputBuffer="";
+  if(term)term.clear();
+  if(lang==="html"){termDiv.style.display="none";preview.style.display="block";preview.srcdoc=code;return;}
+  termDiv.style.display="block";preview.style.display="none";
+  if(ws&&ws.readyState===WebSocket.OPEN)ws.close();
+  runBtn.disabled=true;runBtn.innerHTML='<i class="fa-solid fa-spinner spinner"></i> Running…';
+  try{
+    ws=new WebSocket(`${WS_BASE}/ws`);
+    ws.onopen=()=>{ws.send(JSON.stringify({lang,code}));if(fitAddon)fitAddon.fit();runBtn.disabled=false;runBtn.innerHTML='<i class="fa-solid fa-play"></i> Run Code';};
+    ws.onmessage=e=>{outputBuffer+=e.data;term.write(e.data);};
+    ws.onerror=()=>{runBtn.disabled=false;runBtn.innerHTML='<i class="fa-solid fa-play"></i> Run Code';};
+    ws.onclose=()=>{runBtn.disabled=false;runBtn.innerHTML='<i class="fa-solid fa-play"></i> Run Code';};
+  }catch{runBtn.disabled=false;runBtn.innerHTML='<i class="fa-solid fa-play"></i> Run Code';}
+}
+
+// ── AI ──
+async function askAI(){
+  const aiOut=document.getElementById("ai-out"),fixBtn=document.getElementById("header-fix-btn"),aiBtn=document.getElementById("ai-btn");
+  const code=editor.getValue(),lang=document.getElementById("lang").value,output=outputBuffer||"No output generated";
+  aiBtn.disabled=true;aiBtn.innerHTML='<i class="fa-solid fa-spinner spinner"></i> Analyzing…';
+  aiOut.innerHTML=`<div style="text-align:center;margin-top:40px;color:#c4b5fd;"><i class="fa-solid fa-circle-notch fa-spin fa-2x"></i><p style="margin-top:10px;">Analyzing your code with AI…</p></div>`;
+  try{
+    const r=await fetch(`${API_BASE}/analyze`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code,lang,output})});
+    if(!r.ok)throw new Error(`HTTP ${r.status}`);
+    const data=await r.json();
+    let aiText=data.suggestion||"No suggestion available";
+    const matches=[...aiText.matchAll(/```(?:\w+)?\n([\s\S]*?)```/g)];
+    if(matches.length>0){pendingAiFix=matches[matches.length-1][1].trim();fixBtn.style.display="block";fixBtn.style.background="#10b981";fixBtn.innerHTML='<i class="fa-solid fa-check-double"></i> Apply Fix';}
+    else pendingAiFix="";
+    aiOut.innerHTML=DOMPurify.sanitize(marked.parse(aiText));
+  }catch(err){aiOut.innerHTML=`<div style="color:#f87171;text-align:center;padding:20px;"><i class="fa-solid fa-exclamation-triangle fa-2x"></i><p><strong>Error analyzing code</strong></p><p style="font-size:0.9rem;">${err.message}</p></div>`;}
+  finally{aiBtn.disabled=false;aiBtn.innerHTML='<i class="fa-solid fa-wand-magic-sparkles"></i> Get Suggestions';}
+}
+
+function applyFix(){
+  if(!pendingAiFix||!editor)return;
+  editor.setValue(pendingAiFix);
+  const b=document.getElementById("header-fix-btn");
+  b.innerHTML='<i class="fa-solid fa-check"></i> Applied!';b.style.background="#3b82f6";
+  setTimeout(()=>{b.style.display="none";},2000);
+  saveCode();scheduleLint();
+}
+
+// ── Utilities ──
+function downloadCode(){
+  const code=editor.getValue(),lang=document.getElementById("lang").value;
+  const ext={python:"py",c:"c",cpp:"cpp",java:"java",js:"js",html:"html"}[lang]||"txt";
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([code],{type:'text/plain'}));a.download=`code.${ext}`;a.click();
+}
+function copyOutput(){if(outputBuffer.trim())navigator.clipboard.writeText(outputBuffer);}
+function viewInNewTab(){
+  const code=editor.getValue();if(!code.trim())return;
+  const url=URL.createObjectURL(new Blob([code],{type:'text/html'}));
+  window.open(url,'_blank');setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
+// ── Upload ──
+function uploadFile(event){
+  const file=event.target.files[0];if(!file)return;
+  if(file.size>2*1024*1024){alert(`File too large: ${(file.size/1024/1024).toFixed(1)}MB. Max 2MB.`);event.target.value="";return;}
+  const ext=file.name.split('.').pop().toLowerCase();
+  const extMap={py:'python',c:'c',cpp:'cpp',java:'java',js:'js',html:'html',htm:'html',txt:'python'};
+  const detectedLang=extMap[ext]||'python';
+  const reader=new FileReader();
+  reader.onload=e=>{
+    document.getElementById("lang").value=detectedLang;
+    changeLanguage();
+    setTimeout(()=>{if(editor){editor.setValue(e.target.result);saveCode();scheduleLint();}},100);
+  };
+  reader.readAsText(file);
+  event.target.value="";
+}
+
+// ── About ──
+function openAbout(){document.getElementById("about-overlay").classList.add("open");}
+function closeAbout(){document.getElementById("about-overlay").classList.remove("open");}
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closeAbout();});
+function switchTab(tab){
+  document.querySelectorAll('.atab').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.about-tab-content').forEach(p=>p.style.display='none');
+  document.getElementById('atab-'+tab).style.display='block';
+  document.querySelector(`.atab[onclick="switchTab('${tab}')"]`).classList.add('active');
+}
+
+// ── Splitters ──
+function initSplitters(){
+  const rowTop=document.getElementById("row-top"),rowBottom=document.getElementById("row-bottom");
+  const splitterH=document.getElementById("splitter-h"),splitterV=document.getElementById("splitter-v");
+  const termPanel=document.getElementById("terminal-panel"),aiPanel=document.getElementById("ai-panel");
+  let hDrag=false,hY0=0,hTop0=0,hBot0=0;
+  let vDrag=false,vX0=0,vTerm0=0,vAI0=0;
+
+  splitterH.addEventListener("mousedown",e=>{
+    hDrag=true;hY0=e.clientY;
+    hTop0=rowTop.getBoundingClientRect().height;
+    hBot0=rowBottom.getBoundingClientRect().height;
+    splitterH.classList.add("dragging");
+    document.body.style.cursor="ns-resize";document.body.style.userSelect="none";
+    e.preventDefault();
+  });
+  splitterV.addEventListener("mousedown",e=>{
+    vDrag=true;vX0=e.clientX;
+    vTerm0=termPanel.getBoundingClientRect().width;
+    vAI0=aiPanel.getBoundingClientRect().width;
+    splitterV.classList.add("dragging");
+    document.body.style.cursor="ew-resize";document.body.style.userSelect="none";
+    e.preventDefault();
+  });
+  document.addEventListener("mousemove",e=>{
+    if(hDrag){
+      const delta=e.clientY-hY0;
+      const newTop=Math.max(120,Math.min(hTop0+delta,hTop0+hBot0-120));
+      rowTop.style.flex=`0 0 ${newTop}px`;
+      rowBottom.style.flex=`0 0 ${hTop0+hBot0-newTop}px`;
+      if(editor)editor.layout();if(fitAddon)fitAddon.fit();
+    }
+    if(vDrag){
+      const delta=e.clientX-vX0;
+      const newTerm=Math.max(200,Math.min(vTerm0+delta,vTerm0+vAI0-200));
+      termPanel.style.flex=`0 0 ${newTerm}px`;
+      aiPanel.style.flex=`0 0 ${vTerm0+vAI0-newTerm}px`;
+      if(fitAddon)fitAddon.fit();
+    }
+  });
+  document.addEventListener("mouseup",()=>{
+    if(hDrag){hDrag=false;splitterH.classList.remove("dragging");if(editor)editor.layout();if(fitAddon)fitAddon.fit();}
+    if(vDrag){vDrag=false;splitterV.classList.remove("dragging");if(fitAddon)fitAddon.fit();}
+    document.body.style.cursor="";document.body.style.userSelect="";
+  });
+}
+
+// ── Drag & Drop ──
+function initDragDrop(){
+  const el=document.getElementById("editor-area-el"),overlay=document.getElementById("drop-overlay");
+  let counter=0;
+  el.addEventListener("dragenter",e=>{if(!e.dataTransfer.types.includes("Files"))return;counter++;overlay.classList.add("active");e.preventDefault();});
+  el.addEventListener("dragleave",()=>{if(--counter<=0){counter=0;overlay.classList.remove("active");}});
+  el.addEventListener("dragover",e=>e.preventDefault());
+  el.addEventListener("drop",e=>{
+    e.preventDefault();counter=0;overlay.classList.remove("active");
+    const file=e.dataTransfer.files[0];
+    if(!file)return;
+    if(file.size>2*1024*1024){alert("File too large. Max 2MB.");return;}
+    const ext=file.name.split('.').pop().toLowerCase();
+    const extMap={py:'python',c:'c',cpp:'cpp',java:'java',js:'js',html:'html',htm:'html',txt:'python'};
+    const lang=extMap[ext]||'python';
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      document.getElementById("lang").value=lang;changeLanguage();
+      setTimeout(()=>{if(editor){editor.setValue(ev.target.result);saveCode();scheduleLint();}},100);
+    };
+    reader.readAsText(file);
+  });
+}
+</script>
+</body>
+</html>
