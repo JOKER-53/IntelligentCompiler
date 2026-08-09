@@ -340,7 +340,41 @@ function lintHTML(){
   if(isDoc){
     for(const[tag,msg]of[["<!doctype","Missing <!DOCTYPE html>"],["<html","Missing <html>"],["<head","Missing <head>"],["<body","Missing <body>"],["<title","Missing <title>"]])
       if(!lower.includes(tag))diagnostics.push({line:1,col:1,endLine:1,endCol:2,message:msg,severity:"warning"});
-    const knownTags=new Set(["html","head","body","title","meta","link","script","style","div","span","p","a","img","ul","ol","li","table","tr","td","th","thead","tbody","tfoot","h1","h2","h3","h4","h5","h6","header","footer","main","nav","section","article","aside","form","input","button","textarea","select","option","label","fieldset","legend","br","hr","em","strong","b","i","u","s","small","sub","sup","code","pre","blockquote","figure","figcaption","picture","source","video","audio","canvas","svg","iframe","embed","object","details","summary","time","mark","noscript","!doctype"]);
+    const knownTags=new Set([
+      // HTML structural
+      "html","head","body","title","meta","link","script","style","base","noscript",
+      // Content sectioning
+      "header","footer","main","nav","section","article","aside","h1","h2","h3","h4","h5","h6","hgroup",
+      // Text
+      "div","span","p","br","hr","pre","blockquote","figure","figcaption",
+      "em","strong","b","i","u","s","small","sub","sup","mark","del","ins","abbr",
+      "cite","code","dfn","kbd","samp","var","time","data","address","bdi","bdo",
+      "q","ruby","rt","rp","wbr",
+      // Links & media
+      "a","img","picture","source","video","audio","track","iframe","embed","object","param",
+      "map","area","canvas","svg","use",
+      // SVG elements (common — prevents false positives on inline SVG)
+      "g","path","circle","ellipse","rect","line","polyline","polygon","text","tspan",
+      "defs","clippath","mask","pattern","filter","lineargradient","radialgradient",
+      "stop","symbol","marker","textpath","switch","foreignobject","desc","title",
+      "animate","animatetransform","animatemotion","set","fe","feblend",
+      "fecolormatrix","fecomponenttransfer","fecomposite","feconvolvematrix",
+      "fediffuselighting","fedisplacementmap","fedistantlight","feflood",
+      "fefunca","fefuncb","fefuncg","fefuncr","fegaussianblur","feimage",
+      "femerge","femergenode","femorphology","feoffset","fepointlight",
+      "fespecularlighting","fespotlight","fetile","feturbulence","view",
+      // Lists & tables
+      "ul","ol","li","dl","dt","dd",
+      "table","thead","tbody","tfoot","tr","th","td","caption","col","colgroup",
+      // Forms
+      "form","input","button","textarea","select","option","optgroup",
+      "label","fieldset","legend","datalist","output","progress","meter",
+      // Interactive
+      "details","summary","dialog","menu",
+      // Other
+      "template","slot","portal",
+      "!doctype"
+    ]);
     for(const m of[...code.matchAll(/<\/?([a-z][a-z0-9-]*)/gi)]){
       const tag=m[1].toLowerCase();
       if(!knownTags.has(tag)){
