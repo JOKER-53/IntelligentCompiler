@@ -39,11 +39,18 @@ NIM_MODEL = "meta/llama-3.1-8b-instruct"
 
 # --- SECURITY: Resource limits applied to every subprocess ---
 def set_resource_limits():
-    """Called via preexec_fn — runs inside each child process before exec."""
-    resource.setrlimit(resource.RLIMIT_CPU,   (10, 10))                    # 10s CPU
-    resource.setrlimit(resource.RLIMIT_AS,    (200 * 1024 * 1024,) * 2)   # 200MB RAM
-    resource.setrlimit(resource.RLIMIT_FSIZE, (5 * 1024 * 1024,) * 2)     # 5MB file writes
-    resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))                    # 64 subprocesses
+    """
+    Minimal safe resource limits for execution subprocesses.
+    - RLIMIT_AS removed: causes crashes on Render (Python, Java, Node all need variable amounts)
+    - RLIMIT_NPROC removed: Node.js needs pthreads (uv_thread_create)
+    - Only CPU time is capped — prevents infinite loops
+    - File size capped — prevents disk abuse
+    """
+    try:
+        resource.setrlimit(resource.RLIMIT_CPU,   (10, 10))               # 10s CPU — kills infinite loops
+        resource.setrlimit(resource.RLIMIT_FSIZE, (5 * 1024 * 1024,) * 2) # 5MB max file writes
+    except Exception:
+        pass  # Render may not allow setrlimit — silently ignore
 
 EXECUTION_TIMEOUT = 10  # seconds
 
@@ -70,37 +77,44 @@ async def serve_ui():
 @app.post("/analyze")
 async def analyze_code(req: AnalyzeRequest):
     prompt = f"""
-You are an expert coding assistant. Be concise and structured.
+You are a senior software engineer and code reviewer. Analyze the code below with precision.
 Language: {req.lang}
 
 User Code:
-```
+```{req.lang}
 {req.code}
 ```
 
 Execution Output:
 {req.output}
 
-Your response MUST follow this exact structure — no deviations:
+Respond using EXACTLY this structure. Be specific — no generic advice like "add validation" or "use a library":
 
-##  Analysis
-One or two sentences: what is wrong or what can be improved.
+## 🔍 Analysis
+2-3 sentences. State the SPECIFIC bug or issue (if any). If no bug, identify the most impactful improvement. Reference actual line numbers or variable names from the code.
 
-##  Complexity
-- **Time:** O(...) — one line explanation
-- **Space:** O(...) — one line explanation
-- **Suggestion:** If a better complexity is achievable, mention it in one sentence.
+## ⏱ Complexity
+- **Time:** O(?) — explain WHY based on the actual code (loops, recursion, built-ins used)
+- **Space:** O(?) — explain WHY based on actual variables/structures
+- **Can we do better?** Yes/No — if yes, name the specific algorithm or data structure that would improve it
 
-##  Fixed Code
-EXACTLY ONE complete corrected version. Mark every changed or added line with an inline comment: `# FIXED: reason` for Python/JS, `// FIXED: reason` for C/C++/Java.
-Do NOT show the original code. Do NOT provide multiple versions or alternatives.
+## ✅ Fixed / Improved Code
+ONE complete version. Rules:
+- Mark ONLY lines you changed with `# FIXED: <specific reason>` (Python/JS) or `// FIXED: <specific reason>` (C/C++/Java)
+- The reason must be specific: not "handle error" but "catch ValueError when user enters non-integer"
+- Do NOT add unnecessary changes — if a line is correct, leave it as-is with no comment
 
 ```{req.lang}
-<complete fixed code with FIXED: comments on changed lines>
+<complete code here>
 ```
 
-##  Improvements
-Up to 3 bullet points of additional suggestions (style, edge cases, efficiency). Keep each under 15 words.
+## 💡 Three Specific Improvements
+Each must be actionable and reference the actual code:
+1. **[Category]** Specific suggestion referencing actual function/variable names — why it matters
+2. **[Category]** Specific suggestion — why it matters  
+3. **[Category]** Specific suggestion — why it matters
+
+Categories to choose from: [Security] [Performance] [Readability] [Edge Case] [Memory] [Error Handling] [Best Practice]
 """
     try:
         response = nim_client.chat.completions.create(
@@ -211,14 +225,15 @@ async def _lint_python(code: str):
 
 async def _lint_js(code: str):
     """
-    JS linter using node --check.
-    Node reports one syntax error at a time.
-    Multi-pass: blank the bad line and re-run, up to 5 passes.
+    2-pass JS linting:
+    Pass 1: node --check  → syntax errors (multi-pass for multiple errors)
+    Pass 2: node execution → ReferenceError/TypeError as warnings
     """
     diagnostics = []
     seen = set()
     working = code
 
+    # Pass 1: syntax errors
     for _pass in range(5):
         tmp  = tempfile.gettempdir()
         path = os.path.join(tmp, f"lint_{uuid.uuid4().hex}.js")
@@ -227,19 +242,16 @@ async def _lint_js(code: str):
         try:
             proc = await asyncio.create_subprocess_exec(
                 "node", "--check", path,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
             _, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
         finally:
             if os.path.exists(path): os.remove(path)
 
         if proc.returncode == 0:
-            break  # no more errors
+            break
 
         raw = stderr.decode(errors="replace")
-
-        # Node format: "filepath:LINE\ncode\n   ^\n\nSyntaxError: msg"
         found = False
         for m in re.finditer(
             r'\.js:(\d+)\n(.*?)\n\s*\^\s*\n+(\w*Error[^\n]*)',
@@ -247,11 +259,9 @@ async def _lint_js(code: str):
         ):
             line = int(m.group(1))
             msg  = m.group(3).strip()
-            # Estimate column from caret position
-            caret_line = raw[m.start():m.end()]
-            caret_match = re.search(r'\n(\s*)\^', caret_line)
-            col = len(caret_match.group(1)) + 1 if caret_match else 1
-            key = (line, msg)
+            cm   = re.search(r'\n(\s*)\^', raw[m.start():m.end()])
+            col  = len(cm.group(1)) + 1 if cm else 1
+            key  = (line, msg)
             if key not in seen:
                 seen.add(key)
                 diagnostics.append({
@@ -266,6 +276,40 @@ async def _lint_js(code: str):
                     working = "\n".join(lines)
         if not found:
             break
+
+    # Pass 2: runtime errors as warnings (only when no syntax errors)
+    if not any(d["severity"] == "error" for d in diagnostics):
+        path2 = os.path.join(tempfile.gettempdir(), f"lint_{uuid.uuid4().hex}.js")
+        with open(path2, "w") as f:
+            f.write(code)
+        try:
+            proc2 = await asyncio.create_subprocess_exec(
+                "node", path2,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            _, stderr2 = await asyncio.wait_for(proc2.communicate(), timeout=2)
+            raw2 = stderr2.decode(errors="replace")
+            # Node runtime: "file.js:LINE\ncode\n   ^\nReferenceError: x is not defined"
+            for m in re.finditer(
+                r'\.js:(\d+)\n.*?\n\s*\^\s*\n+(ReferenceError|TypeError):\s*(.+)',
+                raw2, re.S
+            ):
+                line  = int(m.group(1))
+                msg   = f"{m.group(2)}: {m.group(3).strip()}"
+                key   = (line, msg)
+                if key not in seen:
+                    seen.add(key)
+                    diagnostics.append({
+                        "line": line, "col": 1,
+                        "endLine": line, "endCol": 2,
+                        "message": msg, "severity": "warning",
+                    })
+        except asyncio.TimeoutError:
+            pass  # code ran fine or had an infinite loop — ignore
+        except Exception:
+            pass
+        finally:
+            if os.path.exists(path2): os.remove(path2)
 
     return sorted(diagnostics, key=lambda d: d["line"])
 
