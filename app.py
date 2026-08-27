@@ -35,7 +35,7 @@ nim_client = OpenAI(
 )
 
 # Best free coding model on NIM — swap to any NIM model string to change
-NIM_MODEL = "meta/llama-3.1-8b-instruct"
+NIM_MODEL = "deepseek-ai/deepseek-v4-pro-0813"
 
 # --- SECURITY: Resource limits applied to every subprocess ---
 def set_resource_limits():
