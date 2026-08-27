@@ -35,7 +35,7 @@ nim_client = OpenAI(
 )
 
 # Best free coding model on NIM — swap to any NIM model string to change
-NIM_MODEL = "meta/llama-3.1-8b-instruct"
+NIM_MODEL = "deepseek-ai/deepseek-v4-pro-0813"
 
 # --- SECURITY: Resource limits applied to every subprocess ---
 def set_resource_limits():
@@ -277,7 +277,7 @@ async def _lint_js(code: str):
         if not found:
             break
 
-    # Pass 2: runtime errors as warnings (only when no syntax errors)
+    # Pass 2: runtime — catch ReferenceError, TypeError etc.
     if not any(d["severity"] == "error" for d in diagnostics):
         path2 = os.path.join(tempfile.gettempdir(), f"lint_{uuid.uuid4().hex}.js")
         with open(path2, "w") as f:
@@ -287,25 +287,22 @@ async def _lint_js(code: str):
                 "node", path2,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
-            _, stderr2 = await asyncio.wait_for(proc2.communicate(), timeout=2)
+            _, stderr2 = await asyncio.wait_for(proc2.communicate(), timeout=3)
             raw2 = stderr2.decode(errors="replace")
-            # Node runtime: "file.js:LINE\ncode\n   ^\nReferenceError: x is not defined"
-            for m in re.finditer(
-                r'\.js:(\d+)\n.*?\n\s*\^\s*\n+(ReferenceError|TypeError):\s*(.+)',
-                raw2, re.S
-            ):
-                line  = int(m.group(1))
-                msg   = f"{m.group(2)}: {m.group(3).strip()}"
-                key   = (line, msg)
+            pat  = r":([0-9]+)\n[^\n]*\n[ \t]*\^[ \t]*\n+(ReferenceError|TypeError|RangeError):\s*([^\n]+)"
+            for m in re.finditer(pat, raw2):
+                line = int(m.group(1))
+                msg  = m.group(2) + ": " + m.group(3).strip()
+                key  = (line, msg)
                 if key not in seen:
                     seen.add(key)
                     diagnostics.append({
                         "line": line, "col": 1,
                         "endLine": line, "endCol": 2,
-                        "message": msg, "severity": "warning",
+                        "message": msg, "severity": "error",
                     })
         except asyncio.TimeoutError:
-            pass  # code ran fine or had an infinite loop — ignore
+            pass
         except Exception:
             pass
         finally:
@@ -581,4 +578,35 @@ async def ws_handler(ws: WebSocket):
         try:
             await ws.send_text(f"\n[Internal error: {str(e)}]")
         except Exception:
+            pass    # Pass 2: runtime errors
+    if not any(d["severity"] == "error" for d in diagnostics):
+        path2 = os.path.join(tempfile.gettempdir(), f"lint_{uuid.uuid4().hex}.js")
+        with open(path2, "w") as f:
+            f.write(code)
+        try:
+            proc2 = await asyncio.create_subprocess_exec(
+                "node", path2,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            _, stderr2 = await asyncio.wait_for(proc2.communicate(), timeout=3)
+            raw2 = stderr2.decode(errors="replace")
+            pat = re.compile(
+                r":(\d+)\n[^\n]*\n[ \t]*\^[ \t]*\n+(ReferenceError|TypeError|RangeError):\s*([^\n]+)"
+            )
+            for m in pat.finditer(raw2):
+                line = int(m.group(1))
+                msg  = f"{m.group(2)}: {m.group(3).strip()}"
+                key  = (line, msg)
+                if key not in seen:
+                    seen.add(key)
+                    diagnostics.append({
+                        "line": line, "col": 1,
+                        "endLine": line, "endCol": 2,
+                        "message": msg, "severity": "error",
+                    })
+        except asyncio.TimeoutError:
             pass
+        except Exception:
+            pass
+        finally:
+            if os.path.exists(path2): os.remove(path2)
