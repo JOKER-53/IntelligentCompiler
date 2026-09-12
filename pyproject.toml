@@ -1,10 +1,20 @@
 [project]
-name = "repl-nix-workspace"
+name = "intelligent-compiler"
 version = "0.1.0"
-description = "Add your description here"
+description = "Multi-language web compiler with optional AI suggestions"
 requires-python = ">=3.11"
 dependencies = [
-    "flask>=3.1.2",
-    "flask-cors>=6.0.1",
-    "gunicorn>=23.0.0",
+    "fastapi",
+    "uvicorn[standard]==0.23.2",
+    "pydantic",
+    "openai",
+    "pyflakes",
+    "python-multipart",
+    "websockets",
 ]
+
+[project.optional-dependencies]
+test = ["httpx"]
+
+[tool.setuptools]
+py-modules = ["app"]

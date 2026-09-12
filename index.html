@@ -212,7 +212,7 @@ div#ai-out{flex:1;padding:15px;overflow-y:auto;font-family:'Inter',sans-serif;co
       </div>
       <div style="flex:1;position:relative;overflow:hidden;display:flex;flex-direction:column;">
         <div id="terminal"></div>
-        <iframe id="preview"></iframe>
+        <iframe id="preview" sandbox="allow-scripts"></iframe>
       </div>
     </div>
     <div class="splitter-v" id="splitter-v"></div>
@@ -274,19 +274,19 @@ div#ai-out{flex:1;padding:15px;overflow-y:auto;font-family:'Inter',sans-serif;co
 
 <script>
 // ── Config ──
-const isLocalhost = location.hostname==='localhost'||location.hostname==='127.0.0.1';
-const API_BASE = isLocalhost?'http://localhost:5000':'https://intelligentcompiler.onrender.com';
-const WS_BASE  = isLocalhost?'ws://localhost:5000':'wss://intelligentcompiler.onrender.com';
+const API_BASE = location.protocol==='file:'?'http://localhost:10000':
+  (location.hostname.endsWith('.github.io')?'https://intelligentcompiler.onrender.com':location.origin);
+const WS_BASE = API_BASE.replace(/^http/, 'ws');
 
 let ws=null,editor=null,term=null,fitAddon=null;
-let pendingAiFix="",outputBuffer="",inputBuffer="";
+let pendingAiFix="",pendingAiSource=null,outputBuffer="",inputBuffer="";
 let lintDebounceTimer=null,lintAbortController=null;
 const LINT_DEBOUNCE_MS=600;
 const LINTABLE_LANGS=new Set(["python","c","cpp","java","js"]);
 
 const boilerplate={
   python:`print("="*50)\nprint("Developer: JOKER53 (KADHIRAVAN EG)")\nprint("Cyber Security Student")\nprint("="*50)\nname=input("Enter your name: ")\nprint(f"Hello, {name}!")`,
-  c:`#include <stdio.h>\nint main(){\n    char name[50];\n    printf("Enter name: ");\n    scanf("%s",name);\n    printf("Hello, %s!\\n",name);\n    return 0;\n}`,
+  c:`#include <stdio.h>\nint main(){\n    char name[50];\n    printf("Enter name: ");\n    scanf("%49s",name);\n    printf("Hello, %s!\\n",name);\n    return 0;\n}`,
   cpp:`#include <iostream>\n#include <string>\nusing namespace std;\nint main(){\n    string name;\n    cout<<"Enter name: ";\n    cin>>name;\n    cout<<"Hello, "<<name<<"!"<<endl;\n    return 0;\n}`,
   java:`import java.util.Scanner;\npublic class Main{\n    public static void main(String[] args){\n        Scanner s=new Scanner(System.in);\n        System.out.print("Enter name: ");\n        String name=s.nextLine();\n        System.out.println("Hello "+name+"!");\n    }\n}`,
   js:`console.log("Hello from JavaScript!");\nconsole.log("Try adding more code here");`,
@@ -308,8 +308,9 @@ require(['vs/editor/editor.main'],function(){
 });
 
 // ── Lint ──
-function scheduleLint(){clearTimeout(lintDebounceTimer);lintDebounceTimer=setTimeout(runLint,LINT_DEBOUNCE_MS);}
+function scheduleLint(){if(lintAbortController)lintAbortController.abort();clearTimeout(lintDebounceTimer);lintDebounceTimer=setTimeout(runLint,LINT_DEBOUNCE_MS);}
 async function runLint(){
+  if(lintAbortController)lintAbortController.abort();
   const lang=document.getElementById("lang").value;
   if(lang==="html"){lintHTML();return;}
   if(!LINTABLE_LANGS.has(lang)){clearMarkers();setStatusOk("No linting for "+lang);return;}
@@ -317,14 +318,18 @@ async function runLint(){
   const code=editor.getValue();
   if(!code.trim()){clearMarkers();setStatusOk("No errors");return;}
   if(lintAbortController)lintAbortController.abort();
-  lintAbortController=new AbortController();
+  const controller=new AbortController();
+  lintAbortController=controller;
   setStatusLoading("Checking…");
   try{
-    const res=await fetch(`${API_BASE}/lint`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code,lang}),signal:lintAbortController.signal});
+    const res=await fetch(`${API_BASE}/lint`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code,lang}),signal:controller.signal});
     if(!res.ok)throw new Error(`HTTP ${res.status}`);
-    applyDiagnostics((await res.json()).diagnostics||[]);
+    const data=await res.json();
+    if(controller.signal.aborted||editor.getValue()!==code||document.getElementById("lang").value!==lang)return;
+    if(data.error)throw new Error(data.error);
+    applyDiagnostics(data.diagnostics||[]);
   }catch(err){
-    if(err.name==="AbortError")return;
+    if(err.name==="AbortError"||controller.signal.aborted)return;
     clearMarkers();setStatusOk("Linter unavailable");
   }
 }
@@ -456,7 +461,7 @@ window.onload=function(){
     switch(e){
       case'\r':term.write('\r\n');ws.send(JSON.stringify({stdin:inputBuffer}));outputBuffer+=inputBuffer+"\n";inputBuffer="";break;
       case'\u007F':if(inputBuffer.length>0){inputBuffer=inputBuffer.slice(0,-1);term.write('\b \b');}break;
-      case'\u0003':term.write('^C\r\n');inputBuffer="";if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({stdin:"__INTERRUPT__"}));break;
+      case'\u0003':term.write('^C\r\n');inputBuffer="";ws.send(JSON.stringify({signal:"SIGINT"}));break;
       default:if(e>=' '&&e<='~'){inputBuffer+=e;term.write(e);}
     }
   });
@@ -477,44 +482,54 @@ function updateNewTabButton(){const b=document.getElementById("view-new-tab-btn"
 
 // ── Run ──
 function runCode(){
+  if(!editor)return;
   const runBtn=document.getElementById("run-btn"),termDiv=document.getElementById("terminal"),preview=document.getElementById("preview");
   const fixBtn=document.getElementById("header-fix-btn"),code=editor.getValue(),lang=document.getElementById("lang").value;
   fixBtn.style.display="none";pendingAiFix="";outputBuffer="";inputBuffer="";
   if(term)term.clear();
+  if(ws){ws.close();ws=null;}
   if(lang==="html"){termDiv.style.display="none";preview.style.display="block";preview.srcdoc=code;return;}
   termDiv.style.display="block";preview.style.display="none";
   if(ws&&ws.readyState===WebSocket.OPEN)ws.close();
   runBtn.disabled=true;runBtn.innerHTML='<i class="fa-solid fa-spinner spinner"></i> Running…';
   try{
-    ws=new WebSocket(`${WS_BASE}/ws`);
-    ws.onopen=()=>{ws.send(JSON.stringify({lang,code}));if(fitAddon)fitAddon.fit();runBtn.disabled=false;runBtn.innerHTML='<i class="fa-solid fa-play"></i> Run Code';};
-    ws.onmessage=e=>{outputBuffer+=e.data;term.write(e.data);};
-    ws.onerror=()=>{runBtn.disabled=false;runBtn.innerHTML='<i class="fa-solid fa-play"></i> Run Code';};
-    ws.onclose=()=>{runBtn.disabled=false;runBtn.innerHTML='<i class="fa-solid fa-play"></i> Run Code';};
+    const socket=new WebSocket(`${WS_BASE}/ws`);
+    ws=socket;
+    const reset=()=>{if(ws!==socket)return;runBtn.disabled=false;runBtn.innerHTML='<i class="fa-solid fa-play"></i> Run Code';};
+    socket.onopen=()=>{if(ws!==socket)return;socket.send(JSON.stringify({lang,code}));if(fitAddon)fitAddon.fit();reset();};
+    socket.onmessage=e=>{if(ws!==socket)return;outputBuffer=(outputBuffer+e.data).slice(-1048576);if(term)term.write(e.data);};
+    socket.onerror=reset;
+    socket.onclose=()=>{reset();if(ws===socket)ws=null;};
   }catch{runBtn.disabled=false;runBtn.innerHTML='<i class="fa-solid fa-play"></i> Run Code';}
 }
 
 // ── AI ──
 async function askAI(){
+  if(!editor)return;
   const aiOut=document.getElementById("ai-out"),fixBtn=document.getElementById("header-fix-btn"),aiBtn=document.getElementById("ai-btn");
   const code=editor.getValue(),lang=document.getElementById("lang").value,output=outputBuffer||"No output generated";
+  pendingAiFix="";pendingAiSource=null;fixBtn.style.display="none";
   aiBtn.disabled=true;aiBtn.innerHTML='<i class="fa-solid fa-spinner spinner"></i> Analyzing…';
   aiOut.innerHTML=`<div style="text-align:center;margin-top:40px;color:#c4b5fd;"><i class="fa-solid fa-circle-notch fa-spin fa-2x"></i><p style="margin-top:10px;">Analyzing your code with AI…</p></div>`;
   try{
     const r=await fetch(`${API_BASE}/analyze`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code,lang,output})});
-    if(!r.ok)throw new Error(`HTTP ${r.status}`);
     const data=await r.json();
+    if(!r.ok)throw new Error(data.detail||`HTTP ${r.status}`);
     let aiText=data.suggestion||"No suggestion available";
-    const matches=[...aiText.matchAll(/```(?:\w+)?\n([\s\S]*?)```/g)];
+    const matches=[...aiText.matchAll(/```[^\r\n]*\r?\n([\s\S]*?)```/g)];
+    pendingAiSource={code,lang};
     if(matches.length>0){pendingAiFix=matches[matches.length-1][1].trim();fixBtn.style.display="block";fixBtn.style.background="#10b981";fixBtn.innerHTML='<i class="fa-solid fa-check-double"></i> Apply Fix';}
     else pendingAiFix="";
     aiOut.innerHTML=DOMPurify.sanitize(marked.parse(aiText));
-  }catch(err){aiOut.innerHTML=`<div style="color:#f87171;text-align:center;padding:20px;"><i class="fa-solid fa-exclamation-triangle fa-2x"></i><p><strong>Error analyzing code</strong></p><p style="font-size:0.9rem;">${err.message}</p></div>`;}
+  }catch(err){aiOut.innerHTML=`<div style="color:#f87171;text-align:center;padding:20px;"><i class="fa-solid fa-exclamation-triangle fa-2x"></i><p><strong>Error analyzing code</strong></p><p style="font-size:0.9rem;">${esc(err.message)}</p></div>`;}
   finally{aiBtn.disabled=false;aiBtn.innerHTML='<i class="fa-solid fa-wand-magic-sparkles"></i> Get Suggestions';}
 }
 
 function applyFix(){
   if(!pendingAiFix||!editor)return;
+  if(!pendingAiSource||pendingAiSource.lang!==document.getElementById("lang").value||pendingAiSource.code!==editor.getValue()){
+    alert("Your code changed since this suggestion. Request a new suggestion before applying a fix.");return;
+  }
   editor.setValue(pendingAiFix);
   const b=document.getElementById("header-fix-btn");
   b.innerHTML='<i class="fa-solid fa-check"></i> Applied!';b.style.background="#3b82f6";
@@ -531,8 +546,8 @@ function downloadCode(){
 function copyOutput(){if(outputBuffer.trim())navigator.clipboard.writeText(outputBuffer);}
 function viewInNewTab(){
   const code=editor.getValue();if(!code.trim())return;
-  const url=URL.createObjectURL(new Blob([code],{type:'text/html'}));
-  window.open(url,'_blank');setTimeout(()=>URL.revokeObjectURL(url),1000);
+  const page=window.open('about:blank','_blank');
+  if(page){page.opener=null;page.document.title='HTML Preview';const frame=page.document.createElement('iframe');frame.setAttribute('sandbox','allow-scripts');frame.style.cssText='position:fixed;inset:0;width:100%;height:100%;border:0';frame.srcdoc=code;page.document.body.appendChild(frame);}
 }
 
 // ── Upload ──

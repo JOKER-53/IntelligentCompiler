@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -10,6 +10,9 @@ import os
 import shutil
 import re
 import resource
+import signal
+import sys
+from pathlib import Path
 from openai import OpenAI
 
 app = FastAPI()
@@ -25,17 +28,15 @@ app.add_middleware(
 # Get your free key at https://build.nvidia.com  (no credit card needed)
 # Set env var:  NVIDIA_API_KEY=nvapi-xxxxxxxxxxxxxxxxxxxx
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
-if not NVIDIA_API_KEY:
-    raise RuntimeError("NVIDIA_API_KEY is missing. Get a free key at https://build.nvidia.com")
 
 # OpenAI-compatible client pointed at NVIDIA NIM
 nim_client = OpenAI(
     base_url="https://integrate.api.nvidia.com/v1",
     api_key=NVIDIA_API_KEY,
-)
+) if NVIDIA_API_KEY else None
 
 # Best free coding model on NIM — swap to any NIM model string to change
-NIM_MODEL = "deepseek-ai/deepseek-v4-pro-0813"
+NIM_MODEL = os.getenv("NIM_MODEL", "deepseek-ai/deepseek-v4-pro-0813")
 
 # --- SECURITY: Resource limits applied to every subprocess ---
 def set_resource_limits():
@@ -54,6 +55,28 @@ def set_resource_limits():
 
 EXECUTION_TIMEOUT = 10  # seconds
 
+
+async def start_process(*cmd, **kwargs):
+    # A new process group lets timeouts also terminate compiler/runtime children.
+    return await asyncio.create_subprocess_exec(
+        *cmd, start_new_session=True, preexec_fn=set_resource_limits, **kwargs
+    )
+
+
+async def stop_process(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    await proc.wait()
+
+
+async def communicate(proc, timeout, input=None):
+    try:
+        return await asyncio.wait_for(proc.communicate(input=input), timeout=timeout)
+    finally:
+        await stop_process(proc)
+
 # --- MODELS ---
 class AnalyzeRequest(BaseModel):
     code: str
@@ -71,11 +94,13 @@ class LintRequest(BaseModel):
 
 @app.get("/")
 async def serve_ui():
-    return FileResponse("index.html")
+    return FileResponse(Path(__file__).with_name("index.html"))
 
 
 @app.post("/analyze")
 async def analyze_code(req: AnalyzeRequest):
+    if nim_client is None:
+        raise HTTPException(status_code=503, detail="AI suggestions require NVIDIA_API_KEY.")
     prompt = f"""
 You are a senior software engineer and code reviewer. Analyze the code below with precision.
 Language: {req.lang}
@@ -100,7 +125,7 @@ Respond using EXACTLY this structure. Be specific — no generic advice like "ad
 
 ## ✅ Fixed / Improved Code
 ONE complete version. Rules:
-- Mark ONLY lines you changed with `# FIXED: <specific reason>` (Python/JS) or `// FIXED: <specific reason>` (C/C++/Java)
+- Mark ONLY lines you changed with `# FIXED: <specific reason>` (Python) or `// FIXED: <specific reason>` (JS/C/C++/Java)
 - The reason must be specific: not "handle error" but "catch ValueError when user enters non-integer"
 - Do NOT add unnecessary changes — if a line is correct, leave it as-is with no comment
 
@@ -117,7 +142,8 @@ Each must be actionable and reference the actual code:
 Categories to choose from: [Security] [Performance] [Readability] [Edge Case] [Memory] [Error Handling] [Best Practice]
 """
     try:
-        response = nim_client.chat.completions.create(
+        response = await asyncio.to_thread(
+            nim_client.chat.completions.create,
             model=NIM_MODEL,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=2048,
@@ -125,7 +151,7 @@ Categories to choose from: [Security] [Performance] [Readability] [Edge Case] [M
         )
         return {"suggestion": response.choices[0].message.content}
     except Exception as e:
-        return {"suggestion": f"AI Error: {str(e)}"}
+        raise HTTPException(status_code=502, detail="AI provider request failed.") from e
 
 
 @app.post("/lint")
@@ -179,12 +205,12 @@ async def _lint_python(code: str):
             f.write(working_code)
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "python3", "-m", "pyflakes", path,
+            proc = await start_process(
+                sys.executable, "-m", "pyflakes", path,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=8)
+            stdout_b, stderr_b = await communicate(proc, timeout=8)
         finally:
             if os.path.exists(path):
                 os.remove(path)
@@ -214,7 +240,8 @@ async def _lint_python(code: str):
                     # Blank the bad line so next pass finds the next error
                     lines = working_code.split("\n")
                     if line - 1 < len(lines):
-                        lines[line - 1] = "pass  # blanked"
+                        indent = re.match(r"[ \t]*", lines[line - 1]).group()
+                        lines[line - 1] = indent + "pass  # blanked"
                         working_code = "\n".join(lines)
 
         # If this pass had no syntax errors, all warnings already collected — done
@@ -224,11 +251,7 @@ async def _lint_python(code: str):
     return sorted(diagnostics, key=lambda d: d["line"])
 
 async def _lint_js(code: str):
-    """
-    2-pass JS linting:
-    Pass 1: node --check  → syntax errors (multi-pass for multiple errors)
-    Pass 2: node execution → ReferenceError/TypeError as warnings
-    """
+    """Check JavaScript syntax without executing user code."""
     diagnostics = []
     seen = set()
     working = code
@@ -240,11 +263,11 @@ async def _lint_js(code: str):
         with open(path, "w") as f:
             f.write(working)
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = await start_process(
                 "node", "--check", path,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
+            _, stderr = await communicate(proc, timeout=5)
         finally:
             if os.path.exists(path): os.remove(path)
 
@@ -254,12 +277,12 @@ async def _lint_js(code: str):
         raw = stderr.decode(errors="replace")
         found = False
         for m in re.finditer(
-            r'\.js:(\d+)\n(.*?)\n\s*\^\s*\n+(\w*Error[^\n]*)',
+            r'\.js:(\d+)\n([^\n]*)\n[ \t]*\^+[ \t]*\n+(\w*Error[^\n]*)',
             raw, re.S
         ):
             line = int(m.group(1))
             msg  = m.group(3).strip()
-            cm   = re.search(r'\n(\s*)\^', raw[m.start():m.end()])
+            cm   = re.search(r'\n([ \t]*)\^', raw[m.start():m.end()])
             col  = len(cm.group(1)) + 1 if cm else 1
             key  = (line, msg)
             if key not in seen:
@@ -276,37 +299,6 @@ async def _lint_js(code: str):
                     working = "\n".join(lines)
         if not found:
             break
-
-    # Pass 2: runtime — catch ReferenceError, TypeError etc.
-    if not any(d["severity"] == "error" for d in diagnostics):
-        path2 = os.path.join(tempfile.gettempdir(), f"lint_{uuid.uuid4().hex}.js")
-        with open(path2, "w") as f:
-            f.write(code)
-        try:
-            proc2 = await asyncio.create_subprocess_exec(
-                "node", path2,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            )
-            _, stderr2 = await asyncio.wait_for(proc2.communicate(), timeout=3)
-            raw2 = stderr2.decode(errors="replace")
-            pat  = r":([0-9]+)\n[^\n]*\n[ \t]*\^[ \t]*\n+(ReferenceError|TypeError|RangeError):\s*([^\n]+)"
-            for m in re.finditer(pat, raw2):
-                line = int(m.group(1))
-                msg  = m.group(2) + ": " + m.group(3).strip()
-                key  = (line, msg)
-                if key not in seen:
-                    seen.add(key)
-                    diagnostics.append({
-                        "line": line, "col": 1,
-                        "endLine": line, "endCol": 2,
-                        "message": msg, "severity": "error",
-                    })
-        except asyncio.TimeoutError:
-            pass
-        except Exception:
-            pass
-        finally:
-            if os.path.exists(path2): os.remove(path2)
 
     return sorted(diagnostics, key=lambda d: d["line"])
 
@@ -329,15 +321,13 @@ async def _lint_gcc(code: str, cmd: list):
     """
     diagnostics = []
     try:
-        proc = await asyncio.create_subprocess_exec(
+        proc = await start_process(
             *cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        _, stderr = await asyncio.wait_for(
-            proc.communicate(input=code.encode()), timeout=8
-        )
+        _, stderr = await communicate(proc, input=code.encode(), timeout=8)
         raw = stderr.decode(errors="replace")
         # Match only user-code lines, skip stdlib headers, skip note:
         for m in re.finditer(
@@ -367,7 +357,7 @@ async def _lint_java(code: str):
     tmp_dir = os.path.join(tempfile.gettempdir(), f"jlint_{uuid.uuid4().hex}")
     os.makedirs(tmp_dir, exist_ok=True)
 
-    code_stripped = re.sub(r'^\s*package\s+[\w.]+;', '', code, flags=re.MULTILINE)
+    code_stripped = re.sub(r'^[ \t]*package[ \t]+[\w.]+;', '', code, flags=re.MULTILINE)
     match = re.search(r'public\s+class\s+(\w+)', code_stripped) \
          or re.search(r'class\s+(\w+)', code_stripped)
     class_name = match.group(1) if match else "Main"
@@ -377,7 +367,7 @@ async def _lint_java(code: str):
         f.write(code_stripped)
 
     try:
-        proc = await asyncio.create_subprocess_exec(
+        proc = await start_process(
             "javac",
             "-J-Xms32m", "-J-Xmx256m",
             "-J-XX:ReservedCodeCacheSize=32m",
@@ -385,7 +375,7 @@ async def _lint_java(code: str):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             cwd=tmp_dir,
         )
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=12)
+        _, stderr = await communicate(proc, timeout=12)
         raw = stderr.decode(errors="replace")
         # javac: "Filename.java:LINE: error/warning: message"
         for m in re.finditer(r'\.java:(\d+):\s+(error|warning):\s+(.+)', raw):
@@ -410,203 +400,140 @@ async def _lint_java(code: str):
 # ─────────────────────────────────────────────
 
 async def run_interactive_process(ws: WebSocket, cmd, cwd=None):
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        cwd=cwd,
-        preexec_fn=set_resource_limits,
+    proc = await start_process(
+        *cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, cwd=cwd,
     )
 
     async def stream_output():
-        try:
-            while True:
-                data = await proc.stdout.read(1024)
-                if not data:
-                    break
-                await ws.send_text(data.decode(errors="replace"))
-        except Exception:
-            pass
+        total = 0
+        while True:
+            data = await proc.stdout.read(1024)
+            if not data:
+                await proc.wait()
+                return
+            total += len(data)
+            if total > 1024 * 1024:
+                await ws.send_text("\n[Output limit exceeded]\n")
+                return
+            await ws.send_text(data.decode(errors="replace"))
 
     async def stream_input():
-        try:
-            while True:
-                msg = await ws.receive_json()
-                if "stdin" in msg and proc.stdin:
-                    proc.stdin.write((msg["stdin"] + "\n").encode())
-                    await proc.stdin.drain()
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            pass
+        while True:
+            msg = await ws.receive_json()
+            if msg.get("signal") == "SIGINT":
+                return
+            if isinstance(msg.get("stdin"), str) and proc.stdin:
+                proc.stdin.write((msg["stdin"] + "\n").encode())
+                await proc.stdin.drain()
 
-    out_task = asyncio.create_task(stream_output())
-    in_task  = asyncio.create_task(stream_input())
-
+    tasks = [asyncio.create_task(stream_output()), asyncio.create_task(stream_input())]
     try:
-        await asyncio.wait_for(out_task, timeout=EXECUTION_TIMEOUT)
-    except asyncio.TimeoutError:
-        await ws.send_text("\n\x1b[33m[Process timed out after 10 seconds]\x1b[0m\n")
+        done, _ = await asyncio.wait(tasks, timeout=EXECUTION_TIMEOUT,
+                                     return_when=asyncio.FIRST_COMPLETED)
+        if not done:
+            await ws.send_text(f"\n[Process timed out after {EXECUTION_TIMEOUT} seconds]\n")
     finally:
-        in_task.cancel()
-        if proc.returncode is None:
-            proc.kill()
-        await proc.wait()
+        for task in tasks:
+            task.cancel()
+        await stop_process(proc)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def run_python(ws: WebSocket, code: str):
-    tmp  = tempfile.gettempdir()
-    path = os.path.join(tmp, f"{uuid.uuid4().hex}.py")
-    with open(path, "w") as f:
-        f.write(code)
-    try:
-        await run_interactive_process(ws, ["python3", "-u", path])
-    finally:
-        if os.path.exists(path):
-            os.remove(path)
+    with tempfile.TemporaryDirectory(prefix="run_python_") as tmp:
+        src = Path(tmp) / "main.py"
+        src.write_text(code, encoding="utf-8")
+        await run_interactive_process(ws, [sys.executable, "-u", str(src)], cwd=tmp)
+
+
+async def run_native(ws: WebSocket, code: str, compiler: str, extension: str):
+    with tempfile.TemporaryDirectory(prefix="run_native_") as tmp:
+        src = Path(tmp) / f"main.{extension}"
+        exe = str(Path(tmp) / "program")
+        src.write_text(code, encoding="utf-8")
+        cmd = [compiler, str(src), "-o", exe]
+        if extension == "cpp":
+            cmd.append("-std=c++17")
+        proc = await start_process(*cmd, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, cwd=tmp)
+        out, _ = await communicate(proc, timeout=15)
+        if out:
+            await ws.send_text(out.decode(errors="replace"))
+        if proc.returncode == 0:
+            await run_interactive_process(ws, ["stdbuf", "-o0", "-e0", exe], cwd=tmp)
 
 
 async def run_c(ws: WebSocket, code: str):
-    tmp = tempfile.gettempdir()
-    src = os.path.join(tmp, f"{uuid.uuid4().hex}.c")
-    exe = os.path.join(tmp, f"{uuid.uuid4().hex}_c_bin")
-    with open(src, "w") as f:
-        f.write(code)
-    proc = await asyncio.create_subprocess_exec(
-        "gcc", src, "-o", exe,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-    )
-    out, _ = await proc.communicate()
-    if out:
-        await ws.send_text(out.decode(errors="replace"))
-    if proc.returncode != 0:
-        if os.path.exists(src): os.remove(src)
-        return
-    try:
-        await run_interactive_process(ws, ["stdbuf", "-o0", "-e0", exe])
-    finally:
-        for p in (src, exe):
-            if os.path.exists(p): os.remove(p)
+    await run_native(ws, code, "gcc", "c")
 
 
 async def run_cpp(ws: WebSocket, code: str):
-    tmp = tempfile.gettempdir()
-    src = os.path.join(tmp, f"{uuid.uuid4().hex}.cpp")
-    exe = os.path.join(tmp, f"{uuid.uuid4().hex}_cpp_bin")
-    with open(src, "w") as f:
-        f.write(code)
-    proc = await asyncio.create_subprocess_exec(
-        "g++", src, "-o", exe,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-    )
-    out, _ = await proc.communicate()
-    if out:
-        await ws.send_text(out.decode(errors="replace"))
-    if proc.returncode != 0:
-        if os.path.exists(src): os.remove(src)
-        return
-    try:
-        await run_interactive_process(ws, [exe])
-    finally:
-        for p in (src, exe):
-            if os.path.exists(p): os.remove(p)
+    await run_native(ws, code, "g++", "cpp")
 
 
 async def run_java(ws: WebSocket, code: str):
-    tmp_dir = os.path.join(tempfile.gettempdir(), f"java_{uuid.uuid4().hex}")
-    os.makedirs(tmp_dir, exist_ok=True)
-    code = re.sub(r'^\s*package\s+[\w.]+;', '', code, flags=re.MULTILINE)
-    match = re.search(r'public\s+class\s+(\w+)', code) or re.search(r'class\s+(\w+)', code)
-    class_name = match.group(1) if match else "Main"
-    src = os.path.join(tmp_dir, f"{class_name}.java")
-    with open(src, "w") as f:
-        f.write(code)
-    proc = await asyncio.create_subprocess_exec(
-        "javac",
-        "-J-Xms32m", "-J-Xmx256m",
-        "-J-XX:ReservedCodeCacheSize=32m",
-        f"{class_name}.java",
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=tmp_dir
-    )
-    out, _ = await proc.communicate()
-    if out:
-        await ws.send_text(out.decode(errors="replace"))
-    if proc.returncode != 0:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        return
-    try:
-        await run_interactive_process(ws, [
-            "java",
-            "-Xms32m", "-Xmx256m",              # heap: 32MB initial, 256MB max
-            "-XX:ReservedCodeCacheSize=32m",    # fix code cache reservation error
-            "-XX:TieredStopAtLevel=1",           # disable full JIT — faster startup, less memory
-            class_name
-        ], cwd=tmp_dir)
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+    with tempfile.TemporaryDirectory(prefix="run_java_") as tmp:
+        code = re.sub(r'^[ \t]*package[ \t]+[\w.]+;', '', code, flags=re.MULTILINE)
+        match = re.search(r'public\s+class\s+(\w+)', code) or re.search(r'class\s+(\w+)', code)
+        class_name = match.group(1) if match else "Main"
+        (Path(tmp) / f"{class_name}.java").write_text(code, encoding="utf-8")
+        proc = await start_process(
+            "javac", "-J-Xms32m", "-J-Xmx256m",
+            "-J-XX:ReservedCodeCacheSize=32m", f"{class_name}.java",
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=tmp,
+        )
+        out, _ = await communicate(proc, timeout=15)
+        if out:
+            await ws.send_text(out.decode(errors="replace"))
+        if proc.returncode == 0:
+            await run_interactive_process(ws, [
+                "java", "-Xms32m", "-Xmx256m", "-XX:ReservedCodeCacheSize=32m",
+                "-XX:TieredStopAtLevel=1", class_name,
+            ], cwd=tmp)
 
 
 async def run_js(ws: WebSocket, code: str):
-    tmp = tempfile.gettempdir()
-    src = os.path.join(tmp, f"{uuid.uuid4().hex}.js")
-    with open(src, "w") as f:
-        f.write(code)
-    try:
-        await run_interactive_process(ws, ["node", src])
-    finally:
-        if os.path.exists(src):
-            os.remove(src)
+    with tempfile.TemporaryDirectory(prefix="run_js_") as tmp:
+        src = Path(tmp) / "main.js"
+        src.write_text(code, encoding="utf-8")
+        await run_interactive_process(ws, ["node", str(src)], cwd=tmp)
 
 
 @app.websocket("/ws")
 async def ws_handler(ws: WebSocket):
     await ws.accept()
     try:
-        first = await ws.receive_json()
-        lang  = first.get("lang", "python").lower()
-        code  = first.get("code", "")
-
-        if   lang == "python":           await run_python(ws, code)
-        elif lang == "c":                await run_c(ws, code)
-        elif lang in ("cpp", "c++"):     await run_cpp(ws, code)
-        elif lang == "java":             await run_java(ws, code)
-        elif lang in ("js", "javascript"): await run_js(ws, code)
-        elif lang == "html":             await ws.send_text("HTML is rendered locally.")
-        else:                            await ws.send_text(f"Unknown language: {lang}")
+        first = await asyncio.wait_for(ws.receive_json(), timeout=10)
+        if not isinstance(first, dict):
+            raise ValueError("Expected an object containing lang and code.")
+        lang = first.get("lang", "python")
+        code = first.get("code", "")
+        if not isinstance(lang, str) or not isinstance(code, str):
+            raise ValueError("lang and code must be strings.")
+        runners = {
+            "python": run_python, "c": run_c, "cpp": run_cpp, "c++": run_cpp,
+            "java": run_java, "js": run_js, "javascript": run_js,
+        }
+        lang = lang.lower()
+        if lang in runners:
+            await runners[lang](ws, code)
+        elif lang == "html":
+            await ws.send_text("HTML is rendered locally.")
+        else:
+            await ws.send_text(f"Unknown language: {lang}")
+    except asyncio.TimeoutError:
+        try:
+            await ws.send_text("\n[Request or compilation timed out]\n")
+        except Exception:
+            pass
     except Exception as e:
         try:
-            await ws.send_text(f"\n[Internal error: {str(e)}]")
+            await ws.send_text(f"\n[Execution error: {str(e)}]")
         except Exception:
-            pass    # Pass 2: runtime errors
-    if not any(d["severity"] == "error" for d in diagnostics):
-        path2 = os.path.join(tempfile.gettempdir(), f"lint_{uuid.uuid4().hex}.js")
-        with open(path2, "w") as f:
-            f.write(code)
+            pass
+    finally:
         try:
-            proc2 = await asyncio.create_subprocess_exec(
-                "node", path2,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            )
-            _, stderr2 = await asyncio.wait_for(proc2.communicate(), timeout=3)
-            raw2 = stderr2.decode(errors="replace")
-            pat = re.compile(
-                r":(\d+)\n[^\n]*\n[ \t]*\^[ \t]*\n+(ReferenceError|TypeError|RangeError):\s*([^\n]+)"
-            )
-            for m in pat.finditer(raw2):
-                line = int(m.group(1))
-                msg  = f"{m.group(2)}: {m.group(3).strip()}"
-                key  = (line, msg)
-                if key not in seen:
-                    seen.add(key)
-                    diagnostics.append({
-                        "line": line, "col": 1,
-                        "endLine": line, "endCol": 2,
-                        "message": msg, "severity": "error",
-                    })
-        except asyncio.TimeoutError:
-            pass
+            await ws.close()
         except Exception:
             pass
-        finally:
-            if os.path.exists(path2): os.remove(path2)

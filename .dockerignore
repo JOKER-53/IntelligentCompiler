@@ -6,7 +6,11 @@ __pycache__/
 
 # Ignore virtual environments
 venv/
+.venv/
 env/
+.env
+.env.*
+*.key
 
 # Ignore build and temporary files
 *.log

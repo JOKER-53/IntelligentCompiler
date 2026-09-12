@@ -1,39 +1,47 @@
 # Intelligent Compiler
 
-A modern web-based intelligent compiler with AI-powered error detection and fixing capabilities.
+A FastAPI application with a Monaco editor, interactive terminal, syntax diagnostics,
+and optional AI suggestions through NVIDIA NIM. Executes Python, C, C++, Java, and
+JavaScript; HTML runs in a sandboxed browser preview.
 
+## Local development
 
+Use Linux with Python 3.11+, Node.js, GCC, G++, a JDK (javac and java), and
+stdbuf (coreutils). From the repository root:
 
-## ✨ Features
+```sh
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+venv/bin/uvicorn app:app --host 127.0.0.1 --port 10000
+```
 
-- Supports **C, C++, Java, Python, JavaScript, HTML**
-- Professional code editor powered by Monaco Editor
-- Interactive terminal with real-time input/output
-- AI-powered smart error suggestions and fixes (Google Gemini)
-- One-click "Apply Fix" feature
-- Live HTML preview
-- Docker support
+Open http://localhost:10000. The UI uses its serving origin for HTTP and WebSocket
+requests. GitHub Pages uses the configured Render backend. Opening index.html
+directly uses localhost:10000.
 
-## 🚀 Live Demo
+Set NVIDIA_API_KEY before starting the server for AI suggestions. NIM_MODEL
+optionally overrides the identifier in app.py; choose a model available to your
+NVIDIA account. Without a key, editing, linting, and execution still work; the AI
+endpoint returns HTTP 503. No .env file is loaded automatically.
 
-**🌐 [Try Live Demo](https://intelligentcompiler.onrender.com)** 
+## Verification
 
+```sh
+venv/bin/pip install httpx
+venv/bin/python -m unittest discover -s tests -v
+node --test tests/frontend.test.cjs
+venv/bin/python -m pyflakes app.py tests/test_app.py
+```
 
-## 🛠️ Tech Stack
+Runtime tests require the corresponding compilers; unavailable runtimes are skipped.
+AI tests use a fake provider and do not send code externally.
 
-- **Frontend**: HTML, CSS, JavaScript, Monaco Editor, XTerm.js
-- **Backend**: FastAPI (Python)
-- **AI Integration**: Google Gemini
-- **Containerization**: Docker
+## Deployment boundary
 
+The current execution service is intended for trusted local use. Resource limits,
+timeouts, process groups, and temporary directories are **not an execution sandbox**.
+Submitted programs can access the server filesystem, environment, and network.
+The Dockerfile also runs the application as root. Isolate runners from the API and
+its secrets before exposing the execution service to untrusted users.
 
-## 📁 Project Structure
-
-```bash
-IntelligentCompiler/
-├── app.py                 # Main FastAPI application
-├── index.html             # Frontend interface
-├── requirements.txt
-├── Dockerfile
-├── .env.example
-└── screenshots/
+See [REVIEW.md](REVIEW.md) for findings and improvement priorities.
